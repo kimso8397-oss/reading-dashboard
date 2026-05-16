@@ -104,6 +104,24 @@ export default async function handler(req, res) {
       if (r && ratingDist[r] !== undefined) ratingDist[r]++;
     });
 
+    // ── 별점별 전체 책 목록
+    const ratingBooks = { '★': [], '★★': [], '★★★': [], '★★★★': [], '★★★★★': [] };
+    pages.forEach((p) => {
+      const r = p.properties['별점']?.select?.name;
+      if (r && ratingBooks[r]) {
+        ratingBooks[r].push({
+          id: p.id,
+          title: p.properties['Name']?.title?.[0]?.plain_text || '제목 없음',
+          author: p.properties['작가']?.rich_text?.[0]?.plain_text || '',
+          genre: (p.properties['분야']?.multi_select || []).map((g) => g.name),
+          rating: r,
+          review: p.properties['한줄평']?.rich_text?.[0]?.plain_text || '',
+          date: p.properties['책 읽은 날짜']?.date?.start || '',
+          url: p.url,
+        });
+      }
+    });
+
     // ── 최근 읽은 책 (최대 6권)
     const recent = pages.slice(0, 6).map((p) => ({
       id: p.id,
@@ -137,6 +155,7 @@ export default async function handler(req, res) {
       yearOrder: YEAR_ORDER,
       genreData,
       ratingDist,
+      ratingBooks,
       sourceCounts,
       recent,
       quotes,
