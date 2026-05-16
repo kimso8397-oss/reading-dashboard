@@ -7,7 +7,34 @@ import {
 } from 'chart.js';
 import { Bar, Doughnut } from 'react-chartjs-2';
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend);
+// 스택 막대 합계 표시 플러그인
+const stackedTotalPlugin = {
+  id: 'stackedTotal',
+  afterDatasetsDraw(chart) {
+    const { ctx, scales: { x, y } } = chart;
+    const totals = {};
+    chart.data.datasets.forEach((dataset) => {
+      dataset.data.forEach((val, i) => {
+        totals[i] = (totals[i] || 0) + (val || 0);
+      });
+    });
+    ctx.save();
+    ctx.font = '600 11px sans-serif';
+    ctx.fillStyle = '#aaa';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    Object.entries(totals).forEach(([i, total]) => {
+      if (total > 0) {
+        const xPos = x.getPixelForValue(Number(i));
+        const yPos = y.getPixelForValue(total);
+        ctx.fillText(total, xPos, yPos - 4);
+      }
+    });
+    ctx.restore();
+  },
+};
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, stackedTotalPlugin);
 
 const GENRE_COLORS = ['#7F77DD','#1D9E75','#D85A30','#BA7517','#378ADD','#639922','#D4537E','#888780'];
 
@@ -17,6 +44,7 @@ const RESPONSIVE_CSS = `
   .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
   .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .recent-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .rating-books-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
   .donut-wrap { display: flex; align-items: center; gap: 20px; margin-top: 12px; }
   .donut-legend { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
   .donut-legend-item { display: flex; align-items: center; gap: 6px; }
@@ -24,10 +52,14 @@ const RESPONSIVE_CSS = `
   .donut-pct { font-size: 12px; font-weight: 500; color: #ccc; min-width: 36px; text-align: right; }
   .stat-val { font-size: 22px; font-weight: 600; color: #eee; margin: 0 0 4px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .stat-val-sm { font-size: 16px; font-weight: 600; color: #eee; margin: 0 0 4px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rating-row-btn { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: none; cursor: pointer; padding: 4px 6px; border-radius: 8px; transition: background 0.15s; }
+  .rating-row-btn:hover { background: #222; }
+  .rating-row-btn.active { background: #1e1b33; }
   @media (max-width: 640px) {
     .stat-grid { grid-template-columns: repeat(2, 1fr) !important; }
     .chart-row { grid-template-columns: 1fr !important; }
     .recent-grid { grid-template-columns: 1fr !important; }
+    .rating-books-grid { grid-template-columns: 1fr !important; }
     .donut-wrap { flex-direction: column !important; align-items: flex-start !important; }
     .donut-legend { width: 100%; }
     .stat-val { font-size: 20px; }
@@ -39,6 +71,7 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [quoteIdx, setQuoteIdx] = useState(0);
+  const [selectedRating, setSelectedRating] = useState(null);
 
   useEffect(() => {
     fetch('/api/data')
@@ -62,7 +95,7 @@ export default function Dashboard() {
     </div>
   );
 
-  const { stats, yearData, yearOrder, genreData, ratingDist, recent, quotes } = data;
+  const { stats, yearData, yearOrder, genreData, ratingDist, ratingBooks, recent, quotes } = data;
   const quote = quotes?.[quoteIdx];
 
   const activeYears = yearOrder.filter((y) => yearData[y].domestic + yearData[y].foreign > 0);
@@ -75,7 +108,12 @@ export default function Dashboard() {
   };
   const barOptions = {
     responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false } },
+    layout: { padding: { top: 20 } },
+    plugins: {
+      legend: { display: false },
+      tooltip: { mode: 'index', intersect: false },
+      stackedTotal: {},
+    },
     scales: {
       x: { stacked: true, grid: { display: false }, border: { display: false }, ticks: { color: '#888', font: { size: 11 } } },
       y: { stacked: true, border: { display: false }, ticks: { color: '#888', font: { size: 11 } } },
@@ -92,6 +130,11 @@ export default function Dashboard() {
   };
 
   const totalRated = Object.values(ratingDist).reduce((a, b) => a + b, 0);
+  const filteredBooks = selectedRating ? (ratingBooks?.[selectedRating] || []) : [];
+
+  const handleRatingClick = (star) => {
+    setSelectedRating((prev) => (prev === star ? null : star));
+  };
 
   return (
     <>
@@ -179,22 +222,60 @@ export default function Dashboard() {
 
           {/* 별점 분포 */}
           <div style={s.card}>
-            <p style={s.cardTitle}>별점 분포</p>
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <p style={s.cardTitle}>별점 분포</p>
+              {selectedRating && (
+                <span style={s.filterLabel}>
+                  {selectedRating} {filteredBooks.length}권
+                  <button style={s.clearBtn} onClick={() => setSelectedRating(null)}>✕</button>
+                </span>
+              )}
+            </div>
+            <p style={s.cardHint}>별점을 클릭하면 해당 책 목록을 볼 수 있어요</p>
+            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
               {['★★★★★','★★★★','★★★','★★','★'].map((star) => {
                 const cnt = ratingDist[star] || 0;
                 const pct = totalRated > 0 ? Math.round((cnt / totalRated) * 100) : 0;
+                const isActive = selectedRating === star;
                 return (
-                  <div key={star} style={s.ratingRow}>
+                  <button
+                    key={star}
+                    className={`rating-row-btn${isActive ? ' active' : ''}`}
+                    onClick={() => handleRatingClick(star)}
+                  >
                     <span style={s.starLabel}>{star}</span>
                     <div style={s.barBg}>
-                      <div style={{...s.barFill, width: `${pct}%`}}/>
+                      <div style={{...s.barFill, width: `${pct}%`, background: isActive ? '#9F77DD' : '#BA7517'}}/>
                     </div>
                     <span style={s.pctLabel}>{pct}%</span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
+
+            {/* 별점 필터 책 목록 */}
+            {selectedRating && filteredBooks.length > 0 && (
+              <div className="rating-books-grid">
+                {filteredBooks.map((book) => (
+                  <a key={book.id} href={book.url} target="_blank" rel="noreferrer" style={s.bookCard}>
+                    <div style={s.bookTop}>
+                      <div style={s.bookEmoji}>📗</div>
+                      <div style={s.bookMeta}>
+                        <p style={s.bookTitle}>{book.title}</p>
+                        <p style={s.bookAuthor}>{book.author}</p>
+                      </div>
+                    </div>
+                    <div style={s.bookTags}>
+                      {book.genre[0] && <span style={s.genreTag}>{book.genre[0]}</span>}
+                      {book.date && <span style={s.dateTag}>{book.date.slice(0, 7)}</span>}
+                    </div>
+                    {book.review && (
+                      <p style={s.bookReview}>"{book.review}"</p>
+                    )}
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* 최근 읽은 책 */}
@@ -266,15 +347,17 @@ const s = {
   quoteRating: { fontSize: 11, color: '#BA7517' },
 
   card: { background: '#1a1a1a', borderRadius: 12, padding: '1.1rem 1.25rem' },
-  cardTitle: { fontSize: 13, fontWeight: 500, color: '#ccc', margin: '0 0 4px' },
+  cardTitle: { fontSize: 13, fontWeight: 500, color: '#ccc', margin: 0 },
+  cardHint: { fontSize: 11, color: '#444', margin: '3px 0 0' },
+  filterLabel: { fontSize: 12, color: '#AFA9EC', display: 'flex', alignItems: 'center', gap: 6 },
+  clearBtn: { background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 12, padding: '0 2px' },
   legend: { display: 'flex', gap: 12, marginBottom: 10 },
   legendItem: { display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#777' },
   dot: { display: 'inline-block', width: 8, height: 8, borderRadius: 2, flexShrink: 0 },
 
-  ratingRow: { display: 'flex', alignItems: 'center', gap: 10 },
-  starLabel: { width: 58, fontSize: 12, color: '#777', flexShrink: 0 },
+  starLabel: { width: 58, fontSize: 12, color: '#777', flexShrink: 0, textAlign: 'left' },
   barBg: { flex: 1, background: '#2a2a2a', borderRadius: 4, height: 10, overflow: 'hidden' },
-  barFill: { height: '100%', background: '#BA7517', borderRadius: 4 },
+  barFill: { height: '100%', background: '#BA7517', borderRadius: 4, transition: 'width 0.3s ease' },
   pctLabel: { width: 32, fontSize: 11, color: '#666', textAlign: 'right', flexShrink: 0 },
 
   bookCard: { background: '#222', borderRadius: 10, padding: 12, textDecoration: 'none', display: 'flex', flexDirection: 'column', gap: 8 },
