@@ -7,11 +7,15 @@ import {
 } from 'chart.js';
 import { Bar, Doughnut } from 'react-chartjs-2';
 
-// 스택 막대 합계 표시 플러그인
+// 스택 막대 합계 표시 플러그인 (bar 차트에만 적용)
 const stackedTotalPlugin = {
   id: 'stackedTotal',
   afterDatasetsDraw(chart) {
-    const { ctx, scales: { x, y } } = chart;
+    if (chart.config.type !== 'bar') return;
+    const x = chart.scales.x;
+    const y = chart.scales.y;
+    if (!x || !y) return;
+    const { ctx } = chart;
     const totals = {};
     chart.data.datasets.forEach((dataset) => {
       dataset.data.forEach((val, i) => {
@@ -112,7 +116,6 @@ export default function Dashboard() {
     plugins: {
       legend: { display: false },
       tooltip: { mode: 'index', intersect: false },
-      stackedTotal: {},
     },
     scales: {
       x: { stacked: true, grid: { display: false }, border: { display: false }, ticks: { color: '#888', font: { size: 11 } } },
