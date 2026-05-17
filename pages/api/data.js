@@ -34,6 +34,37 @@ async function queryAll(sorts) {
   return results;
 }
 
+// 페이지 본문 블록 가져오기
+async function fetchPageBlocks(pageId) {
+  try {
+    const res = await fetch(
+      `https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`,
+      {
+        headers: {
+          Authorization: `Bearer ${NOTION_TOKEN}`,
+          'Notion-Version': '2022-06-28',
+        },
+      }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.results || [];
+  } catch {
+    return [];
+  }
+}
+
+// 블록에서 하이라이트 문장 추출 (bullet 포인트 + paragraph)
+function extractHighlights(blocks) {
+  return blocks
+    .filter((b) => b.type === 'bulleted_list_item' || b.type === 'paragraph')
+    .map((b) => {
+      const rt = b[b.type]?.rich_text || [];
+      return rt.map((r) => r.plain_text).join('').trim();
+    })
+    .filter((t) => t.length >= 15 && t.length <= 400);
+}
+
 const STAR_MAP = { '★': 1, '★★': 2, '★★★': 3, '★★★★': 4, '★★★★★': 5 };
 const YEAR_ORDER = ['2019년','2020년','2021년','2022년','2023년','2024년','2025년','2026년'];
 
@@ -48,7 +79,7 @@ export default async function handler(req, res) {
     // ── 총 독서량
     const total = pages.length;
 
-    // ── 올해(2026년) 읽은 책
+    // ── 올해 읽은 책
     const currentYear = `${new Date().getFullYear()}년`;
     const thisYear = pages.filter(
       (p) => p.properties['연도']?.select?.name === currentYear
@@ -136,17 +167,56 @@ export default async function handler(req, res) {
       url: p.url,
     }));
 
-    // ── 하이라이트 문장 (한줄평이 있는 책에서 랜덤)
-    const withReview = pages.filter(
-      (p) => p.properties['한줄평']?.rich_text?.[0]?.plain_text
+    // ── 하이라이트 문장: 책 페이지 본문 블록에서 추출
+    // 전체 책에서 15권을 골고루 샘플링
+    const SAMPLE_SIZE = 15;
+    const step = Math.max(1, Math.floor(pages.length / SAMPLE_SIZE));
+    const samplePages = [];
+    for (let i = 0; i < pages.length && samplePages.length < SAMPLE_SIZE; i += step) {
+      samplePages.push(pages[i]);
+    }
+
+    const blockResults = await Promise.allSettled(
+      samplePages.map(async (p) => {
+        const blocks = await fetchPageBlocks(p.id);
+        const highlights = extractHighlights(blocks);
+        return {
+          book: p.properties['Name']?.title?.[0]?.plain_text || '',
+          author: p.properties['작가']?.rich_text?.[0]?.plain_text || '',
+          genre: p.properties['분야']?.multi_select?.[0]?.name || '',
+          rating: p.properties['별점']?.select?.name || '',
+          highlights,
+        };
+      })
     );
-    const quotes = withReview.slice(0, 20).map((p) => ({
-      text: p.properties['한줄평'].rich_text[0].plain_text,
-      book: p.properties['Name']?.title?.[0]?.plain_text || '',
-      author: p.properties['작가']?.rich_text?.[0]?.plain_text || '',
-      genre: p.properties['분야']?.multi_select?.[0]?.name || '',
-      rating: p.properties['별점']?.select?.name || '',
-    }));
+
+    // 블록에서 추출한 quotes
+    const quotes = blockResults
+      .filter((r) => r.status === 'fulfilled' && r.value.highlights.length > 0)
+      .flatMap((r) =>
+        r.value.highlights.map((text) => ({
+          text,
+          book: r.value.book,
+          author: r.value.author,
+          genre: r.value.genre,
+          rating: r.value.rating,
+        }))
+      );
+
+    // 블록에서 못 가져온 경우 한줄평 fallback
+    if (quotes.length < 5) {
+      const fallback = pages
+        .filter((p) => p.properties['한줄평']?.rich_text?.[0]?.plain_text)
+        .slice(0, 30)
+        .map((p) => ({
+          text: p.properties['한줄평'].rich_text[0].plain_text,
+          book: p.properties['Name']?.title?.[0]?.plain_text || '',
+          author: p.properties['작가']?.rich_text?.[0]?.plain_text || '',
+          genre: p.properties['분야']?.multi_select?.[0]?.name || '',
+          rating: p.properties['별점']?.select?.name || '',
+        }));
+      quotes.push(...fallback);
+    }
 
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate');
     res.json({
